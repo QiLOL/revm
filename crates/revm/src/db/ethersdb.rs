@@ -1,6 +1,6 @@
 use crate::primitives::{AccountInfo, Bytecode, B160, B256, KECCAK_EMPTY, U256};
 use crate::Database;
-use ethers_core::types::{BlockId, H160 as eH160, H256, U64 as eU64};
+use ethers_core::types::{BlockId, BlockNumber, H160 as eH160, H256, U64 as eU64};
 use ethers_providers::Middleware;
 use std::sync::Arc;
 use tokio::runtime::{Handle, Runtime};
@@ -49,6 +49,20 @@ where
             Some(runtime) => runtime.block_on(f),
             None => futures::executor::block_on(f),
         }
+    }
+
+    pub fn get_block_number(&self) ->  Option<eU64>{
+        let blockId = BlockId::from(
+            self.block_on(self.client.get_block_number()).ok()?,
+        );
+        match blockId{
+            BlockId::Number(blockNum) => match blockNum{
+                BlockNumber::Number(num) => Some(num),
+                _ => None,
+            }
+            _ => None,
+        }
+
     }
 }
 
