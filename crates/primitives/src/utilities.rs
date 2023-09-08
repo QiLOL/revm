@@ -8,10 +8,10 @@ pub const KECCAK_EMPTY: B256 = B256(hex!(
 
 #[inline(always)]
 pub fn keccak256(input: &[u8]) -> B256 {
-    B256::from_slice(Keccak256::digest(input).as_slice())
+    B256(Keccak256::digest(input)[..].try_into().unwrap())
 }
 
-/// Returns the address for the legacy `CREATE` scheme: [`CreateScheme::Create`]
+/// Returns the address for the legacy `CREATE` scheme: [`crate::env::CreateScheme::Create`]
 pub fn create_address(caller: B160, nonce: u64) -> B160 {
     let mut stream = rlp::RlpStream::new_list(2);
     stream.append(&caller.0.as_ref());
@@ -20,7 +20,7 @@ pub fn create_address(caller: B160, nonce: u64) -> B160 {
     B160(out[12..].try_into().unwrap())
 }
 
-/// Returns the address for the `CREATE2` scheme: [`CreateScheme::Create2`]
+/// Returns the address for the `CREATE2` scheme: [`crate::env::CreateScheme::Create2`]
 pub fn create2_address(caller: B160, code_hash: B256, salt: U256) -> B160 {
     let mut hasher = Keccak256::new();
     hasher.update([0xff]);
@@ -34,7 +34,7 @@ pub fn create2_address(caller: B160, code_hash: B256, salt: U256) -> B160 {
 /// Serde functions to serde as [bytes::Bytes] hex string
 #[cfg(feature = "serde")]
 pub mod serde_hex_bytes {
-    use alloc::string::String;
+    use alloc::string::{String, ToString};
     use serde::{Deserialize, Deserializer, Serializer};
 
     pub fn serialize<S, T>(x: T, s: S) -> Result<S::Ok, S::Error>

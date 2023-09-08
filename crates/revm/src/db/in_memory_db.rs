@@ -1,100 +1,41 @@
-use super::{DatabaseCommit, DatabaseRef};
+use super::{DatabaseCommit, DatabaseRef, EmptyDB};
 use crate::primitives::{
-    hash_map::Entry, keccak256, Account, AccountInfo, Bytecode, HashMap, Log, B160, B256,
-    KECCAK_EMPTY, U256,
+    hash_map::Entry, Account, AccountInfo, Bytecode, HashMap, Log, B160, B256, KECCAK_EMPTY, U256,
 };
 use crate::Database;
 use alloc::vec::Vec;
 use core::convert::Infallible;
 
+/// A [Database] implementation that stores all state changes in memory.
 pub type InMemoryDB = CacheDB<EmptyDB>;
 
-impl Default for InMemoryDB {
-    fn default() -> Self {
-        CacheDB::new(EmptyDB {})
-    }
-}
-
-/// Memory backend, storing all state values in a `Map` in memory.
+/// A [Database] implementation that stores all state changes in memory.
+///
+/// This implementation wraps a [DatabaseRef] that is used to load data ([AccountInfo]).
+///
+/// Accounts and code are stored in two separate maps, the `accounts` map maps addresses to [DbAccount],
+/// whereas contracts are identified by their code hash, and are stored in the `contracts` map.
+/// The [DbAccount] holds the code hash of the contract, which is used to look up the contract in the `contracts` map.
 #[derive(Debug, Clone)]
 pub struct CacheDB<ExtDB: DatabaseRef> {
     /// Account info where None means it is not existing. Not existing state is needed for Pre TANGERINE forks.
     /// `code` is always `None`, and bytecode can be found in `contracts`.
     pub accounts: HashMap<B160, DbAccount>,
+    /// Tracks all contracts by their code hash.
     pub contracts: HashMap<B256, Bytecode>,
+    /// All logs that were committed via [DatabaseCommit::commit].
     pub logs: Vec<Log>,
+    /// All cached block hashes from the [DatabaseRef].
     pub block_hashes: HashMap<U256, B256>,
+    /// The underlying database ([DatabaseRef]) that is used to load data.
+    ///
+    /// Note: this is read-only, data is never written to this database.
     pub db: ExtDB,
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct DbAccount {
-    pub info: AccountInfo,
-    /// If account is selfdestructed or newly created, storage will be cleared.
-    pub account_state: AccountState,
-    /// storage slots
-    pub storage: HashMap<U256, U256>,
-}
-
-impl DbAccount {
-    pub fn new_not_existing() -> Self {
-        Self {
-            account_state: AccountState::NotExisting,
-            ..Default::default()
-        }
-    }
-    pub fn info(&self) -> Option<AccountInfo> {
-        if matches!(self.account_state, AccountState::NotExisting) {
-            None
-        } else {
-            Some(self.info.clone())
-        }
-    }
-}
-
-impl From<Option<AccountInfo>> for DbAccount {
-    fn from(from: Option<AccountInfo>) -> Self {
-        if let Some(info) = from {
-            Self {
-                info,
-                account_state: AccountState::None,
-                ..Default::default()
-            }
-        } else {
-            Self::new_not_existing()
-        }
-    }
-}
-
-impl From<AccountInfo> for DbAccount {
-    fn from(info: AccountInfo) -> Self {
-        Self {
-            info,
-            account_state: AccountState::None,
-            ..Default::default()
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default, Eq, PartialEq)]
-pub enum AccountState {
-    /// Before Spurious Dragon hardfork there was a difference between empty and not existing.
-    /// And we are flaging it here.
-    NotExisting,
-    /// EVM touched this account. For newer hardfork this means it can be clearead/removed from state.
-    Touched,
-    /// EVM cleared storage of this account, mostly by selfdestruct, we don't ask database for storage slots
-    /// and assume they are U256::ZERO
-    StorageCleared,
-    /// EVM didn't interacted with this account
-    #[default]
-    None,
-}
-
-impl AccountState {
-    /// Returns `true` if EVM cleared storage of this account
-    pub fn is_storage_cleared(&self) -> bool {
-        matches!(self, AccountState::StorageCleared)
+impl<ExtDB: DatabaseRef + Default> Default for CacheDB<ExtDB> {
+    fn default() -> Self {
+        Self::new(ExtDB::default())
     }
 }
 
@@ -112,10 +53,15 @@ impl<ExtDB: DatabaseRef> CacheDB<ExtDB> {
         }
     }
 
+    /// Inserts the account's code into the cache.
+    ///
+    /// Accounts objects and code are stored separately in the cache, this will take the code from the account and instead map it to the code hash.
+    ///
+    /// Note: This will not insert into the underlying external database.
     pub fn insert_contract(&mut self, account: &mut AccountInfo) {
         if let Some(code) = &account.code {
             if !code.is_empty() {
-                account.code_hash = code.hash();
+                account.code_hash = code.hash_slow();
                 self.contracts
                     .entry(account.code_hash)
                     .or_insert_with(|| code.clone());
@@ -132,6 +78,9 @@ impl<ExtDB: DatabaseRef> CacheDB<ExtDB> {
         self.accounts.entry(address).or_default().info = info;
     }
 
+    /// Returns the account for the given address.
+    ///
+    /// If the account was not found in the cache, it will be loaded from the underlying database.
     pub fn load_account(&mut self, address: B160) -> Result<&mut DbAccount, ExtDB::Error> {
         let db = &self.db;
         match self.accounts.entry(address) {
@@ -175,19 +124,23 @@ impl<ExtDB: DatabaseRef> CacheDB<ExtDB> {
 impl<ExtDB: DatabaseRef> DatabaseCommit for CacheDB<ExtDB> {
     fn commit(&mut self, changes: HashMap<B160, Account>) {
         for (address, mut account) in changes {
-            if account.is_destroyed {
+            if !account.is_touched() {
+                continue;
+            }
+            if account.is_selfdestructed() {
                 let db_account = self.accounts.entry(address).or_default();
                 db_account.storage.clear();
                 db_account.account_state = AccountState::NotExisting;
                 db_account.info = AccountInfo::default();
                 continue;
             }
+            let is_newly_created = account.is_created();
             self.insert_contract(&mut account.info);
 
             let db_account = self.accounts.entry(address).or_default();
             db_account.info = account.info;
 
-            db_account.account_state = if account.storage_cleared {
+            db_account.account_state = if is_newly_created {
                 db_account.storage.clear();
                 AccountState::StorageCleared
             } else if db_account.account_state.is_storage_cleared() {
@@ -209,17 +162,6 @@ impl<ExtDB: DatabaseRef> DatabaseCommit for CacheDB<ExtDB> {
 impl<ExtDB: DatabaseRef> Database for CacheDB<ExtDB> {
     type Error = ExtDB::Error;
 
-    fn block_hash(&mut self, number: U256) -> Result<B256, Self::Error> {
-        match self.block_hashes.entry(number) {
-            Entry::Occupied(entry) => Ok(*entry.get()),
-            Entry::Vacant(entry) => {
-                let hash = self.db.block_hash(number)?;
-                entry.insert(hash);
-                Ok(hash)
-            }
-        }
-    }
-
     fn basic(&mut self, address: B160) -> Result<Option<AccountInfo>, Self::Error> {
         let basic = match self.accounts.entry(address) {
             Entry::Occupied(entry) => entry.into_mut(),
@@ -234,6 +176,16 @@ impl<ExtDB: DatabaseRef> Database for CacheDB<ExtDB> {
             ),
         };
         Ok(basic.info())
+    }
+
+    fn code_by_hash(&mut self, code_hash: B256) -> Result<Bytecode, Self::Error> {
+        match self.contracts.entry(code_hash) {
+            Entry::Occupied(entry) => Ok(entry.get().clone()),
+            Entry::Vacant(entry) => {
+                // if you return code bytes when basic fn is called this function is not needed.
+                Ok(entry.insert(self.db.code_by_hash(code_hash)?).clone())
+            }
+        }
     }
 
     /// Get the value in an account's storage slot.
@@ -276,12 +228,13 @@ impl<ExtDB: DatabaseRef> Database for CacheDB<ExtDB> {
         }
     }
 
-    fn code_by_hash(&mut self, code_hash: B256) -> Result<Bytecode, Self::Error> {
-        match self.contracts.entry(code_hash) {
-            Entry::Occupied(entry) => Ok(entry.get().clone()),
+    fn block_hash(&mut self, number: U256) -> Result<B256, Self::Error> {
+        match self.block_hashes.entry(number) {
+            Entry::Occupied(entry) => Ok(*entry.get()),
             Entry::Vacant(entry) => {
-                // if you return code bytes when basic fn is called this function is not needed.
-                Ok(entry.insert(self.db.code_by_hash(code_hash)?).clone())
+                let hash = self.db.block_hash(number)?;
+                entry.insert(hash);
+                Ok(hash)
             }
         }
     }
@@ -294,6 +247,13 @@ impl<ExtDB: DatabaseRef> DatabaseRef for CacheDB<ExtDB> {
         match self.accounts.get(&address) {
             Some(acc) => Ok(acc.info()),
             None => self.db.basic(address),
+        }
+    }
+
+    fn code_by_hash(&self, code_hash: B256) -> Result<Bytecode, Self::Error> {
+        match self.contracts.get(&code_hash) {
+            Some(entry) => Ok(entry.clone()),
+            None => self.db.code_by_hash(code_hash),
         }
     }
 
@@ -316,13 +276,6 @@ impl<ExtDB: DatabaseRef> DatabaseRef for CacheDB<ExtDB> {
         }
     }
 
-    fn code_by_hash(&self, code_hash: B256) -> Result<Bytecode, Self::Error> {
-        match self.contracts.get(&code_hash) {
-            Some(entry) => Ok(entry.clone()),
-            None => self.db.code_by_hash(code_hash),
-        }
-    }
-
     fn block_hash(&self, number: U256) -> Result<B256, Self::Error> {
         match self.block_hashes.get(&number) {
             Some(entry) => Ok(*entry),
@@ -331,28 +284,67 @@ impl<ExtDB: DatabaseRef> DatabaseRef for CacheDB<ExtDB> {
     }
 }
 
-/// An empty database that always returns default values when queried.
-#[derive(Debug, Default, Clone)]
-pub struct EmptyDB();
+#[derive(Debug, Clone, Default)]
+pub struct DbAccount {
+    pub info: AccountInfo,
+    /// If account is selfdestructed or newly created, storage will be cleared.
+    pub account_state: AccountState,
+    /// storage slots
+    pub storage: HashMap<U256, U256>,
+}
 
-impl DatabaseRef for EmptyDB {
-    type Error = Infallible;
-    /// Get basic account information.
-    fn basic(&self, _address: B160) -> Result<Option<AccountInfo>, Self::Error> {
-        Ok(None)
-    }
-    /// Get account code by its hash
-    fn code_by_hash(&self, _code_hash: B256) -> Result<Bytecode, Self::Error> {
-        Ok(Bytecode::new())
-    }
-    /// Get storage value of address at index.
-    fn storage(&self, _address: B160, _index: U256) -> Result<U256, Self::Error> {
-        Ok(U256::default())
+impl DbAccount {
+    pub fn new_not_existing() -> Self {
+        Self {
+            account_state: AccountState::NotExisting,
+            ..Default::default()
+        }
     }
 
-    // History related
-    fn block_hash(&self, number: U256) -> Result<B256, Self::Error> {
-        Ok(keccak256(&number.to_be_bytes::<{ U256::BYTES }>()))
+    pub fn info(&self) -> Option<AccountInfo> {
+        if matches!(self.account_state, AccountState::NotExisting) {
+            None
+        } else {
+            Some(self.info.clone())
+        }
+    }
+}
+
+impl From<Option<AccountInfo>> for DbAccount {
+    fn from(from: Option<AccountInfo>) -> Self {
+        from.map(Self::from).unwrap_or_else(Self::new_not_existing)
+    }
+}
+
+impl From<AccountInfo> for DbAccount {
+    fn from(info: AccountInfo) -> Self {
+        Self {
+            info,
+            account_state: AccountState::None,
+            ..Default::default()
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Eq, PartialEq)]
+pub enum AccountState {
+    /// Before Spurious Dragon hardfork there was a difference between empty and not existing.
+    /// And we are flagging it here.
+    NotExisting,
+    /// EVM touched this account. For newer hardfork this means it can be cleared/removed from state.
+    Touched,
+    /// EVM cleared storage of this account, mostly by selfdestruct, we don't ask database for storage slots
+    /// and assume they are U256::ZERO
+    StorageCleared,
+    /// EVM didn't interacted with this account
+    #[default]
+    None,
+}
+
+impl AccountState {
+    /// Returns `true` if EVM cleared storage of this account
+    pub fn is_storage_cleared(&self) -> bool {
+        matches!(self, AccountState::StorageCleared)
     }
 }
 
@@ -364,7 +356,7 @@ pub struct BenchmarkDB(pub Bytecode, B256);
 
 impl BenchmarkDB {
     pub fn new_bytecode(bytecode: Bytecode) -> Self {
-        let hash = bytecode.hash();
+        let hash = bytecode.hash_slow();
         Self(bytecode, hash)
     }
 }
@@ -379,6 +371,14 @@ impl Database for BenchmarkDB {
                 balance: U256::from(10000000),
                 code: Some(self.0.clone()),
                 code_hash: self.1,
+            }));
+        }
+        if address == B160::from(1) {
+            return Ok(Some(AccountInfo {
+                nonce: 0,
+                balance: U256::from(10000000),
+                code: None,
+                code_hash: KECCAK_EMPTY,
             }));
         }
         Ok(None)
@@ -406,7 +406,7 @@ mod tests {
     use crate::primitives::{db::Database, AccountInfo, U256};
 
     #[test]
-    pub fn test_insert_account_storage() {
+    fn test_insert_account_storage() {
         let account = 42.into();
         let nonce = 42;
         let mut init_state = CacheDB::new(EmptyDB::default());
@@ -427,7 +427,7 @@ mod tests {
     }
 
     #[test]
-    pub fn test_replace_account_storage() {
+    fn test_replace_account_storage() {
         let account = 42.into();
         let nonce = 42;
         let mut init_state = CacheDB::new(EmptyDB::default());

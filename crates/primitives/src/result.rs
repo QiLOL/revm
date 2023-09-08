@@ -1,9 +1,10 @@
 use crate::{Log, State, B160};
 use alloc::vec::Vec;
 use bytes::Bytes;
+use core::fmt;
 use ruint::aliases::U256;
 
-pub type EVMResult<DB> = core::result::Result<ResultAndState, EVMError<DB>>;
+pub type EVMResult<DBError> = core::result::Result<ResultAndState, EVMError<DBError>>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -38,7 +39,7 @@ pub enum ExecutionResult {
 impl ExecutionResult {
     /// Returns if transaction execution is successful.
     /// 1 indicates success, 0 indicates revert.
-    /// https://eips.ethereum.org/EIPS/eip-658
+    /// <https://eips.ethereum.org/EIPS/eip-658>
     pub fn is_success(&self) -> bool {
         matches!(self, Self::Success { .. })
     }
@@ -48,6 +49,28 @@ impl ExecutionResult {
         match self {
             Self::Success { logs, .. } => logs.clone(),
             _ => Vec::new(),
+        }
+    }
+
+    /// Returns the output data of the execution.
+    ///
+    /// Returns `None` if the execution was halted.
+    pub fn output(&self) -> Option<&Bytes> {
+        match self {
+            Self::Success { output, .. } => Some(output.data()),
+            Self::Revert { output, .. } => Some(output),
+            _ => None,
+        }
+    }
+
+    /// Consumes the type and returns the output data of the execution.
+    ///
+    /// Returns `None` if the execution was halted.
+    pub fn into_output(self) -> Option<Bytes> {
+        match self {
+            Self::Success { output, .. } => Some(output.into_data()),
+            Self::Revert { output, .. } => Some(output),
+            _ => None,
         }
     }
 
@@ -87,18 +110,42 @@ impl Output {
             Output::Create(data, _) => data,
         }
     }
+
+    /// Returns the output data of the execution output.
+    pub fn data(&self) -> &Bytes {
+        match self {
+            Output::Call(data) => data,
+            Output::Create(data, _) => data,
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum EVMError<DB> {
+pub enum EVMError<DBError> {
     Transaction(InvalidTransaction),
     /// REVM specific and related to environment.
     PrevrandaoNotSet,
-    Database(DB),
+    Database(DBError),
 }
 
-impl<DB> From<InvalidTransaction> for EVMError<DB> {
+#[cfg(feature = "std")]
+impl<DBError> std::error::Error for EVMError<DBError> where Self: fmt::Debug + fmt::Display {}
+
+impl<DBError> fmt::Display for EVMError<DBError>
+where
+    DBError: fmt::Display,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            EVMError::Transaction(v) => write!(f, "Transaction error: {:?}", v),
+            EVMError::PrevrandaoNotSet => f.write_str("Prevrandao not set"),
+            EVMError::Database(v) => write!(f, "Database error: {}", v),
+        }
+    }
+}
+
+impl<DBError> From<InvalidTransaction> for EVMError<DBError> {
     fn from(invalid: InvalidTransaction) -> Self {
         EVMError::Transaction(invalid)
     }
@@ -114,8 +161,8 @@ pub enum InvalidTransaction {
     /// EIP-3607 Reject transactions from senders with deployed code
     RejectCallerWithCode,
     /// Transaction account does not have enough amount of ether to cover transferred value and gas_limit*gas_price.
-    LackOfFundForGasLimit {
-        gas_limit: U256,
+    LackOfFundForMaxFee {
+        fee: u64,
         balance: U256,
     },
     /// Overflow payment in transaction.
@@ -133,9 +180,12 @@ pub enum InvalidTransaction {
     /// EIP-3860: Limit and meter initcode
     CreateInitcodeSizeLimit,
     InvalidChainId,
+    /// Access list is not supported is not supported
+    /// for blocks before Berlin hardfork.
+    AccessListNotSupported,
 }
 
-/// When transaction return successfully without halts.
+/// Reason a transaction successfully completed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Eval {

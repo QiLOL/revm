@@ -1,16 +1,14 @@
-use std::{str::FromStr, sync::Arc};
 use anyhow::{Ok, Result};
 use bytes::Bytes;
-use ethers::{
-    abi::parse_abi,
-    prelude::BaseContract,
-    providers::{Http, Provider},
-};
+use ethers_contract::BaseContract;
+use ethers_core::abi::parse_abi;
+use ethers_providers::{Http, Provider};
 use revm::{
     db::{CacheDB, EmptyDB, EthersDB},
     primitives::{ExecutionResult, Output, TransactTo, B160, U256 as rU256},
     Database, EVM,
 };
+use std::{str::FromStr, sync::Arc};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -74,7 +72,7 @@ async fn main() -> Result<()> {
     // insert pre-built database from above
     evm.database(cache_db);
 
-    // fill in missing bits of env struc
+    // fill in missing bits of env struct
     // change that to whatever caller you want to be
     evm.env.tx.caller = B160::from_str("0x0000000000000000000000000000000000000000")?;
     // account you want to transact with
@@ -82,7 +80,7 @@ async fn main() -> Result<()> {
     // calldata formed via abigen
     evm.env.tx.data = Bytes::from(hex::decode(hex::encode(&encoded))?);
     // transaction value in wei
-    evm.env.tx.value = rU256::try_from(0)?;
+    evm.env.tx.value = rU256::from(0);
 
     // execute transaction without writing to the DB
     let ref_tx = evm.transact_ref().unwrap();
@@ -91,16 +89,15 @@ async fn main() -> Result<()> {
 
     // unpack output call enum into raw bytes
     let value = match result {
-        ExecutionResult::Success { output, .. } => match output {
-            Output::Call(value) => Some(value),
-            _ => None,
-        },
-        _ => None,
+        ExecutionResult::Success {
+            output: Output::Call(value),
+            ..
+        } => value,
+        result => panic!("Execution failed: {result:?}"),
     };
 
     // decode bytes to reserves + ts via ethers-rs's abi decode
-    let (reserve0, reserve1, ts): (u128, u128, u32) =
-        abi.decode_output("getReserves", value.unwrap())?;
+    let (reserve0, reserve1, ts): (u128, u128, u32) = abi.decode_output("getReserves", value)?;
 
     // Print emulated getReserves() call output
     println!("Reserve0: {:#?}", reserve0);

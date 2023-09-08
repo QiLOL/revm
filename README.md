@@ -2,8 +2,8 @@
 
 Is EVM written in rust that is focused on **speed** and **simplicity**. It has fast and flexible implementation with simple interface and embedded Host. It is passing all `ethereum/tests` test suits
 
-Here is list of things that i would like to use as guide in this project:
-- **EVM compatibility and stability** - this goes without saying but it is nice to put it here. In blockchain industry, stability is most desired attribute of any system.
+Here is a list of things that I would like to use as guide in this project:
+- **EVM compatibility and stability** - this goes without saying but it is nice to put it here. In the blockchain industry, stability is the most desired attribute of any system.
 - **Speed** - is one of the most important things and most decisions are made to complement this.
 - **Simplicity** - simplification of internals so that it can be easily understood and extended, and interface that can be easily used or integrated into other projects.
 - **interfacing** - `[no_std]` so that it can be used as wasm lib and integrate with JavaScript and cpp binding if needed.
@@ -26,7 +26,7 @@ Last checked revm requires rust v1.65 or higher for `core::error::Error`
 There were some big efforts on optimization of revm:
 * Optimizing interpreter loop: https://github.com/bluealloy/revm/issues/7
 * Introducing Bytecode format (and better bytecode analysis): https://github.com/bluealloy/revm/issues/121
-* Unification of instruction signatures: https://github.com/bluealloy/revm/pull/283 
+* Unification of instruction signatures: https://github.com/bluealloy/revm/pull/283
 
 # Running eth tests
 
@@ -48,6 +48,12 @@ cargo run --package revm-test --release --bin snailtracer
 cargo flamegraph --root --freq 4000 --min-width 0.001 --package revm-test --bin snailtracer
 ```
 
+## Running example
+
+```shell
+cargo run -p revm --features ethersdb --example fork_ref_transact
+```
+
 # Used by:
 
 * Foundry: https://github.com/foundry-rs/foundry
@@ -58,6 +64,14 @@ cargo flamegraph --root --freq 4000 --min-width 0.001 --package revm-test --bin 
 
 (If you want to add your project to the list, ping me or open the PR)
 
+
+# Documentation
+
+To serve the mdbook documentation, ensure you have mdbook installed (if not install it with cargo) and then run:
+
+```shell
+mdbook serve documentation
+```
 
 # Contact
 

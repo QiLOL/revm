@@ -2,7 +2,7 @@
 //! It is a great tool if some debugging is needed.
 //!
 use crate::interpreter::{opcode, CallInputs, CreateInputs, Gas, InstructionResult, Interpreter};
-use crate::primitives::{hex, Bytes, B160};
+use crate::primitives::{hex, Bytes, B160, U256};
 use crate::{inspectors::GasInspector, Database, EVMData, Inspector};
 #[derive(Clone, Default)]
 pub struct CustomPrintTracer {
@@ -14,21 +14,14 @@ impl<DB: Database> Inspector<DB> for CustomPrintTracer {
         &mut self,
         interp: &mut Interpreter,
         data: &mut EVMData<'_, DB>,
-        is_static: bool,
     ) -> InstructionResult {
-        self.gas_inspector
-            .initialize_interp(interp, data, is_static);
+        self.gas_inspector.initialize_interp(interp, data);
         InstructionResult::Continue
     }
 
     // get opcode by calling `interp.contract.opcode(interp.program_counter())`.
     // all other information can be obtained from interp.
-    fn step(
-        &mut self,
-        interp: &mut Interpreter,
-        data: &mut EVMData<'_, DB>,
-        is_static: bool,
-    ) -> InstructionResult {
+    fn step(&mut self, interp: &mut Interpreter, data: &mut EVMData<'_, DB>) -> InstructionResult {
         let opcode = interp.current_opcode();
         let opcode_str = opcode::OPCODE_JUMPMAP[opcode as usize];
 
@@ -48,7 +41,7 @@ impl<DB: Database> Inspector<DB> for CustomPrintTracer {
             interp.memory.data().len(),
         );
 
-        self.gas_inspector.step(interp, data, is_static);
+        self.gas_inspector.step(interp, data);
 
         InstructionResult::Continue
     }
@@ -57,10 +50,9 @@ impl<DB: Database> Inspector<DB> for CustomPrintTracer {
         &mut self,
         interp: &mut Interpreter,
         data: &mut EVMData<'_, DB>,
-        is_static: bool,
         eval: InstructionResult,
     ) -> InstructionResult {
-        self.gas_inspector.step_end(interp, data, is_static, eval);
+        self.gas_inspector.step_end(interp, data, eval);
         InstructionResult::Continue
     }
 
@@ -71,10 +63,9 @@ impl<DB: Database> Inspector<DB> for CustomPrintTracer {
         remaining_gas: Gas,
         ret: InstructionResult,
         out: Bytes,
-        is_static: bool,
     ) -> (InstructionResult, Gas, Bytes) {
         self.gas_inspector
-            .call_end(data, inputs, remaining_gas, ret, out.clone(), is_static);
+            .call_end(data, inputs, remaining_gas, ret, out.clone());
         (ret, remaining_gas, out)
     }
 
@@ -96,13 +87,12 @@ impl<DB: Database> Inspector<DB> for CustomPrintTracer {
         &mut self,
         _data: &mut EVMData<'_, DB>,
         inputs: &mut CallInputs,
-        is_static: bool,
     ) -> (InstructionResult, Gas, Bytes) {
         println!(
-            "SM CALL:   {:?},context:{:?}, is_static:{:?}, transfer:{:?}, input_size:{:?}",
+            "SM CALL:   {:?}, context:{:?}, is_static:{:?}, transfer:{:?}, input_size:{:?}",
             inputs.contract,
             inputs.context,
-            is_static,
+            inputs.is_static,
             inputs.transfer,
             inputs.input.len(),
         );
@@ -125,8 +115,11 @@ impl<DB: Database> Inspector<DB> for CustomPrintTracer {
         (InstructionResult::Continue, None, Gas::new(0), Bytes::new())
     }
 
-    fn selfdestruct(&mut self, contract: B160, target: B160) {
-        println!("SELFDESTRUCT on {contract:?} refund target: {target:?}");
+    fn selfdestruct(&mut self, contract: B160, target: B160, value: U256) {
+        println!(
+            "SELFDESTRUCT: contract: {:?}, refund target: {:?}, value {:?}",
+            contract, target, value
+        );
     }
 }
 

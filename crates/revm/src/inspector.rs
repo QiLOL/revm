@@ -1,23 +1,27 @@
 use crate::evm_impl::EVMData;
 use crate::interpreter::{CallInputs, CreateInputs, Gas, InstructionResult, Interpreter};
-use crate::primitives::{db::Database, Bytes, B160, B256};
+use crate::primitives::{db::Database, Bytes, B160, B256, U256};
 
 use auto_impl::auto_impl;
 
 #[cfg(feature = "std")]
-pub mod customprinter;
-pub mod gas;
-pub mod noop;
-#[cfg(feature = "serde")]
-pub mod tracer_eip3155;
+mod customprinter;
+mod gas;
+mod noop;
+#[cfg(all(feature = "std", feature = "serde"))]
+mod tracer_eip3155;
 
 /// All Inspectors implementations that revm has.
 pub mod inspectors {
     #[cfg(feature = "std")]
+    #[doc(inline)]
     pub use super::customprinter::CustomPrintTracer;
+    #[doc(inline)]
     pub use super::gas::GasInspector;
+    #[doc(inline)]
     pub use super::noop::NoOpInspector;
-    #[cfg(feature = "serde")]
+    #[cfg(all(feature = "std", feature = "serde"))]
+    #[doc(inline)]
     pub use super::tracer_eip3155::TracerEip3155;
 }
 
@@ -31,7 +35,6 @@ pub trait Inspector<DB: Database> {
         &mut self,
         _interp: &mut Interpreter,
         _data: &mut EVMData<'_, DB>,
-        _is_static: bool,
     ) -> InstructionResult {
         InstructionResult::Continue
     }
@@ -48,7 +51,6 @@ pub trait Inspector<DB: Database> {
         &mut self,
         _interp: &mut Interpreter,
         _data: &mut EVMData<'_, DB>,
-        _is_static: bool,
     ) -> InstructionResult {
         InstructionResult::Continue
     }
@@ -70,7 +72,6 @@ pub trait Inspector<DB: Database> {
         &mut self,
         _interp: &mut Interpreter,
         _data: &mut EVMData<'_, DB>,
-        _is_static: bool,
         _eval: InstructionResult,
     ) -> InstructionResult {
         InstructionResult::Continue
@@ -83,7 +84,6 @@ pub trait Inspector<DB: Database> {
         &mut self,
         _data: &mut EVMData<'_, DB>,
         _inputs: &mut CallInputs,
-        _is_static: bool,
     ) -> (InstructionResult, Gas, Bytes) {
         (InstructionResult::Continue, Gas::new(0), Bytes::new())
     }
@@ -99,7 +99,6 @@ pub trait Inspector<DB: Database> {
         remaining_gas: Gas,
         ret: InstructionResult,
         out: Bytes,
-        _is_static: bool,
     ) -> (InstructionResult, Gas, Bytes) {
         (ret, remaining_gas, out)
     }
@@ -137,5 +136,5 @@ pub trait Inspector<DB: Database> {
     }
 
     /// Called when a contract has been self-destructed with funds transferred to target.
-    fn selfdestruct(&mut self, _contract: B160, _target: B160) {}
+    fn selfdestruct(&mut self, _contract: B160, _target: B160, _value: U256) {}
 }

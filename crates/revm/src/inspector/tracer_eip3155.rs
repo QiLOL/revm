@@ -1,4 +1,4 @@
-//! Inspector that support tracing of EIP-3155 https://eips.ethereum.org/EIPS/eip-3155
+//! Inspector that support tracing of EIP-3155 <https://eips.ethereum.org/EIPS/eip-3155>
 
 use crate::inspectors::GasInspector;
 use crate::interpreter::{CallInputs, CreateInputs, Gas, InstructionResult};
@@ -51,22 +51,15 @@ impl<DB: Database> Inspector<DB> for TracerEip3155 {
         &mut self,
         interp: &mut Interpreter,
         data: &mut EVMData<'_, DB>,
-        is_static: bool,
     ) -> InstructionResult {
-        self.gas_inspector
-            .initialize_interp(interp, data, is_static);
+        self.gas_inspector.initialize_interp(interp, data);
         InstructionResult::Continue
     }
 
     // get opcode by calling `interp.contract.opcode(interp.program_counter())`.
     // all other information can be obtained from interp.
-    fn step(
-        &mut self,
-        interp: &mut Interpreter,
-        data: &mut EVMData<'_, DB>,
-        is_static: bool,
-    ) -> InstructionResult {
-        self.gas_inspector.step(interp, data, is_static);
+    fn step(&mut self, interp: &mut Interpreter, data: &mut EVMData<'_, DB>) -> InstructionResult {
+        self.gas_inspector.step(interp, data);
         self.stack = interp.stack.clone();
         self.pc = interp.program_counter();
         self.opcode = interp.current_opcode();
@@ -80,10 +73,9 @@ impl<DB: Database> Inspector<DB> for TracerEip3155 {
         &mut self,
         interp: &mut Interpreter,
         data: &mut EVMData<'_, DB>,
-        is_static: bool,
         eval: InstructionResult,
     ) -> InstructionResult {
-        self.gas_inspector.step_end(interp, data, is_static, eval);
+        self.gas_inspector.step_end(interp, data, eval);
         if self.skip {
             self.skip = false;
             return InstructionResult::Continue;
@@ -97,7 +89,6 @@ impl<DB: Database> Inspector<DB> for TracerEip3155 {
         &mut self,
         data: &mut EVMData<'_, DB>,
         _inputs: &mut CallInputs,
-        _is_static: bool,
     ) -> (InstructionResult, Gas, Bytes) {
         self.print_log_line(data.journaled_state.depth());
         (InstructionResult::Continue, Gas::new(0), Bytes::new())
@@ -110,29 +101,38 @@ impl<DB: Database> Inspector<DB> for TracerEip3155 {
         remaining_gas: Gas,
         ret: InstructionResult,
         out: Bytes,
-        is_static: bool,
     ) -> (InstructionResult, Gas, Bytes) {
         self.gas_inspector
-            .call_end(data, inputs, remaining_gas, ret, out.clone(), is_static);
+            .call_end(data, inputs, remaining_gas, ret, out.clone());
         // self.log_step(interp, data, is_static, eval);
         self.skip = true;
         if data.journaled_state.depth() == 0 {
             let log_line = json!({
                 //stateroot
-                "output": format!("{out:?}"),
-                "gasUser": format!("0x{:x}", self.gas_inspector.gas_remaining()),
+                "output": format!("0x{}", hex::encode(out.as_ref())),
+                "gasUsed": format!("0x{:x}", self.gas_inspector.gas_remaining()),
                 //time
                 //fork
             });
 
-            writeln!(
-                self.output,
-                "{:?}",
-                serde_json::to_string(&log_line).unwrap()
-            )
-            .expect("If output fails we can ignore the logging");
+            writeln!(self.output, "{}", serde_json::to_string(&log_line).unwrap())
+                .expect("If output fails we can ignore the logging");
         }
         (ret, remaining_gas, out)
+    }
+
+    fn create(
+        &mut self,
+        data: &mut EVMData<'_, DB>,
+        _inputs: &mut CreateInputs,
+    ) -> (InstructionResult, Option<B160>, Gas, Bytes) {
+        self.print_log_line(data.journaled_state.depth());
+        (
+            InstructionResult::Continue,
+            None,
+            Gas::new(0),
+            Bytes::default(),
+        )
     }
 
     fn create_end(
@@ -146,6 +146,7 @@ impl<DB: Database> Inspector<DB> for TracerEip3155 {
     ) -> (InstructionResult, Option<B160>, Gas, Bytes) {
         self.gas_inspector
             .create_end(data, inputs, ret, address, remaining_gas, out.clone());
+        self.skip = true;
         (ret, address, remaining_gas, out)
     }
 }

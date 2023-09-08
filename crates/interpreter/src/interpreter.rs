@@ -6,21 +6,23 @@ mod stack;
 pub use analysis::BytecodeLocked;
 pub use contract::Contract;
 pub use memory::Memory;
-pub use stack::Stack;
+pub use stack::{Stack, STACK_LIMIT};
 
 use crate::primitives::{Bytes, Spec};
 use crate::{
+    alloc::boxed::Box,
     instructions::{eval, InstructionResult},
     Gas, Host,
 };
 use core::ops::Range;
 
-pub const STACK_LIMIT: u64 = 1024;
 pub const CALL_STACK_LIMIT: u64 = 1024;
 
 /// EIP-170: Contract code size limit
-/// By default limit is 0x6000 (~25kb)
+///
+/// By default this limit is 0x6000 (~25kb)
 pub const MAX_CODE_SIZE: usize = 0x6000;
+
 /// EIP-3860: Limit and meter initcode
 pub const MAX_INITCODE_SIZE: usize = 2 * MAX_CODE_SIZE;
 
@@ -42,7 +44,7 @@ pub struct Interpreter {
     /// Is interpreter call static.
     pub is_static: bool,
     /// Contract information and invoking data
-    pub contract: Contract,
+    pub contract: Box<Contract>,
     /// Memory limit. See [`crate::CfgEnv`].
     #[cfg(feature = "memory_limit")]
     pub memory_limit: u64,
@@ -55,7 +57,7 @@ impl Interpreter {
     }
 
     /// Create new interpreter
-    pub fn new(contract: Contract, gas_limit: u64, is_static: bool) -> Self {
+    pub fn new(contract: Box<Contract>, gas_limit: u64, is_static: bool) -> Self {
         #[cfg(not(feature = "memory_limit"))]
         {
             Self {
@@ -79,7 +81,7 @@ impl Interpreter {
 
     #[cfg(feature = "memory_limit")]
     pub fn new_with_memory_limit(
-        contract: Contract,
+        contract: Box<Contract>,
         gas_limit: u64,
         is_static: bool,
         memory_limit: u64,
@@ -149,14 +151,14 @@ impl Interpreter {
     pub fn run_inspect<H: Host, SPEC: Spec>(&mut self, host: &mut H) -> InstructionResult {
         while self.instruction_result == InstructionResult::Continue {
             // step
-            let ret = host.step(self, self.is_static);
+            let ret = host.step(self);
             if ret != InstructionResult::Continue {
                 return ret;
             }
             self.step::<H, SPEC>(host);
 
             // step ends
-            let ret = host.step_end(self, self.is_static, self.instruction_result);
+            let ret = host.step_end(self, self.instruction_result);
             if ret != InstructionResult::Continue {
                 return ret;
             }

@@ -1,20 +1,19 @@
-mod dummy_host;
-
 use crate::primitives::Bytecode;
 use crate::{
     primitives::{Bytes, Env, B160, B256, U256},
     CallInputs, CreateInputs, Gas, InstructionResult, Interpreter, SelfDestructResult,
 };
-pub use alloc::vec::Vec;
-pub use dummy_host::DummyHost;
+use alloc::vec::Vec;
+pub use dummy::DummyHost;
+
+mod dummy;
 
 /// EVM context host.
 pub trait Host {
-    fn step(&mut self, interpreter: &mut Interpreter, is_static: bool) -> InstructionResult;
+    fn step(&mut self, interpreter: &mut Interpreter) -> InstructionResult;
     fn step_end(
         &mut self,
         interpreter: &mut Interpreter,
-        is_static: bool,
         ret: InstructionResult,
     ) -> InstructionResult;
 
@@ -40,6 +39,10 @@ pub trait Host {
         index: U256,
         value: U256,
     ) -> Option<(U256, U256, U256, bool)>;
+    /// Get the transient storage value of address at index.
+    fn tload(&mut self, address: B160, index: U256) -> U256;
+    /// Set the transient storage value of address at index.
+    fn tstore(&mut self, address: B160, index: U256, value: U256);
     /// Create a log owned by address with given topics and data.
     fn log(&mut self, address: B160, topics: Vec<B256>, data: Bytes);
     /// Mark an address to be deleted, with funds transferred to target.
